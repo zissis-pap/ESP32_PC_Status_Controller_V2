@@ -4,6 +4,9 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <Update.h>
 #include <main.h>
 #include <UniversalTelegramBot.h>
 #include <time.h>
@@ -12,6 +15,8 @@
 #include <enumerations.h>
 #include <consts.h>
 #include <credentials.h>
+#include <login_page.h>
+#include <server_index.h>
 #include <string>
 
 // ENABLE CORE 0
@@ -21,6 +26,7 @@ void Core0(void *pvParameters); // Function to run on core 0
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); // SPI hardware interface
 WiFiClientSecure espClient;
 WiFiClient       SimpleClient;
+WebServer server(80);
 PubSubClient     client(SimpleClient);
 UniversalTelegramBot bot(TELEGRAM_BOT_TOKEN, espClient);
 
@@ -66,9 +72,7 @@ void setup()
   pinMode(RST_SW, INPUT_PULLDOWN);
   pinMode(RST_State, INPUT_PULLDOWN);
   // Attach the two Interrupts
-  attachInterrupt(digitalPinToInterrupt(PWR_SW), Power, HIGH);
-  attachInterrupt(digitalPinToInterrupt(RST_SW), Reset, HIGH);
-  attachInterrupt(digitalPinToInterrupt(RST_State), Status, CHANGE);
+  EnableInterrupts();
 
   Serial.begin(115200); // Init serial port
   Serial.printf("PC CONTROLLER ");
@@ -167,6 +171,12 @@ void ExecuteState(void)
 				Serial.printf("SYSTEM WILL EXECUTE COMMAND\n");
 			#endif
       ExecuteSystemCommand();
+      break;
+    case FIRMWARE_UPDATE:
+      #ifdef SERIAL_PRINTING
+        Serial.printf("SYSTEM WILL ENTER FUOTA MODE\n");
+      #endif
+      FirmwareUpdateMode();
       break;
     default:
       #ifdef SERIAL_PRINTING
@@ -274,6 +284,107 @@ void ExecuteSystemCommand(void)
       break;
   }
   SYSTEM_STATE = LISTENING;
+}
+
+void FirmwareUpdateMode(void)
+{
+  static uint8_t FUOTA_STATUS = FUOTA_FAIL;
+  static uint32_t timer = millis();
+  if(FUOTA_STATUS == FUOTA_FAIL)
+  {
+    FUOTA_STATUS = SetupFirmwareUpdate();
+  } 
+  if(FUOTA_STATUS == FUOTA_SUCCESS)
+  {
+    while(SYSTEM_STATE == FIRMWARE_UPDATE)
+    {
+      if(timer < millis() - 5000)
+      {
+        mx.clear();
+        printString("FUOTA");
+        timer = millis();
+      }
+      server.handleClient();
+      ListenForNewMessages();
+      delay(1);
+    }
+  }
+  server.stop();
+  FUOTA_STATUS = FUOTA_FAIL;
+}
+
+uint8_t SetupFirmwareUpdate(void)
+{
+  /*use mdns for host name resolution*/
+  if (!MDNS.begin(host)) //http://esp32.local
+  { 
+    #ifdef SERIAL_PRINTING
+      Serial.println("Error setting up MDNS responder!");
+    #endif
+    print_data[NewMessageCounter] = "Error setting up MDNS responder!";
+    NewMessageCounter++;
+    SYSTEM_STATE = LISTENING;
+    return FUOTA_FAIL;
+  }
+  else
+  {
+    #ifdef SERIAL_PRINTING
+      Serial.println("mDNS responder started");
+    #endif
+    detachInterrupt(PWR_SW);
+    detachInterrupt(RST_SW);
+    detachInterrupt(RST_State);
+    /*return index page which is stored in serverIndex */
+    server.on("/", HTTP_GET, []() 
+    {
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/html", loginIndex);
+    });
+    server.on("/serverIndex", HTTP_GET, []() 
+    {
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/html", serverIndex);
+    });
+    /*handling uploading firmware file */
+    server.on("/update", HTTP_POST, []() 
+    {
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+      ESP.restart();
+    }, []() 
+    {
+      HTTPUpload& upload = server.upload();
+      if (upload.status == UPLOAD_FILE_START) 
+      {
+        Serial.printf("Update: %s\n", upload.filename.c_str());
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) //start with max available size
+        { 
+          Update.printError(Serial);
+        }
+      } 
+      else if (upload.status == UPLOAD_FILE_WRITE) 
+      {
+        /* flashing firmware to ESP*/
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) 
+        {
+          Update.printError(Serial);
+        }
+      } 
+      else if (upload.status == UPLOAD_FILE_END) 
+      {
+        if (Update.end(true)) 
+        { //true to set the size to the current progress
+          Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+        } 
+        else 
+        {
+          Update.printError(Serial);
+        }
+      }
+    });
+    server.begin();
+    return FUOTA_SUCCESS;
+  }
 }
 
 void RelayAction(uint8_t select, uint16_t duration)
@@ -586,6 +697,23 @@ void HandleNewMessages(int numNewMessages)
       NewMessageCounter++;
       RelayAction(PR_Relay, 5000);
     }
+
+    else if(text == "/fuota")
+    {
+      bot.sendMessage(chat_id, "FUOTA mode command received", "");
+      print_data[NewMessageCounter] = "FUOTA mode initiated";
+      NewMessageCounter++;
+      SYSTEM_STATE = FIRMWARE_UPDATE;
+    }
+
+    else if(text == "/exit_fuota")
+    {
+      bot.sendMessage(chat_id, "Exit FUOTA mode command received", "");
+      print_data[NewMessageCounter] = "Exit FUOTA mode";
+      EnableInterrupts();
+      NewMessageCounter++;
+      SYSTEM_STATE = LISTENING;
+    }
     else
     {
       print_data[NewMessageCounter] = "Zissis says: " + text;
@@ -708,7 +836,14 @@ void Core0(void *pvParameters)
     }
     delay(1); // delay so that the core won't panic
   }
-} 
+}
+
+void EnableInterrupts(void)
+{
+  attachInterrupt(digitalPinToInterrupt(PWR_SW), Power, HIGH);
+  attachInterrupt(digitalPinToInterrupt(RST_SW), Reset, HIGH);
+  attachInterrupt(digitalPinToInterrupt(RST_State), Status, CHANGE);
+}
 
 void IRAM_ATTR Power(void) // Function to Power On or Off the system
 { 

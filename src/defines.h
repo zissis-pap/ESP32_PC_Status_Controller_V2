@@ -29,6 +29,7 @@
 #define ntpServer           "pool.ntp.org"
 #define gmtOffset_sec       7200
 #define daylightOffset_sec  3600
+#define host                "ESP32_PC_Controller"
 
 // Global message buffers shared by Serial and Scrolling functions ===================================
 #define BUFFER_LENGTH       32
