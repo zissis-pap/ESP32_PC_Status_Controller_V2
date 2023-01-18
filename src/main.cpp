@@ -3,7 +3,6 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <PubSubClient.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <Update.h>
@@ -25,9 +24,7 @@ void Core0(void *pvParameters); // Function to run on core 0
 
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES); // SPI hardware interface
 WiFiClientSecure espClient;
-WiFiClient       SimpleClient;
 WebServer server(80);
-PubSubClient     client(SimpleClient);
 UniversalTelegramBot bot(TELEGRAM_BOT_TOKEN, espClient);
 
 /* VARIABLES*/
@@ -81,10 +78,7 @@ void setup()
   
   mx.begin();
   espClient.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Add root certificate for api.telegram.org
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(mqtt_callback);
   CheckWiFIConnection();
-  CheckMQTTConnection();
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   printString(".");
   #ifdef SERIAL_PRINTING
@@ -118,12 +112,6 @@ void ErrorResolver(void)
           Serial.printf("SYSTEM IS NOT CONNECTED TO THE WIFI NETWORK\n");
         #endif
         ConnectToWiFi();
-        break;
-      case MQTT_ERROR:
-        #ifdef SERIAL_PRINTING
-          Serial.printf("SYSTEM IS NOT CONNECTED TO THE MQTT BROKER\n");
-        #endif
-        ConnectToMQTT();
         break;
       case NTP_SERVER_DOWN:
         #ifdef SERIAL_PRINTING
@@ -298,7 +286,7 @@ void FirmwareUpdateMode(void)
   {
     while(SYSTEM_STATE == FIRMWARE_UPDATE)
     {
-      if(timer < millis() - 5000)
+      if((timer < millis() - 5000) && (!printing))
       {
         mx.clear();
         printString("FUOTA");
@@ -450,73 +438,6 @@ void ConnectToWiFi(void)
   #endif
   ClearErrorID(WIFI_DISCONNECTED);
   digitalWrite(LED_BUILTIN, HIGH);
-}
-
-void CheckMQTTConnection(void)
-{
-  if(!client.connected()) 
-  {
-    SetErrorID(MQTT_ERROR);
-  }
-  else
-  {
-    ClearErrorID(MQTT_ERROR);
-  }
-}
-
-void ConnectToMQTT(void)
-{
-  while (!client.connected()) 
-  {
-    Serial.printf("Attempting MQTT connection\n");
-    // Attempt to connect
-    if (client.connect("PC_CONTROLLER")) // Set name of MQTT client
-    {
-      Serial.printf("MQTT connected\n");
-      // Subscribe
-      client.subscribe("esp32/output"); // Subscribe to MQTT topic
-      ClearErrorID(MQTT_ERROR);
-    } 
-    else 
-    {
-      #ifdef SERIAL_PRINTING
-        Serial.printf("failed, rc=");
-        Serial.print(client.state());
-      #endif
-      if(client.state() == -2)
-      {
-        #ifdef SERIAL_PRINTING
-          Serial.printf("\nMQTT is unavailable\n");
-        #endif
-        ClearErrorID(MQTT_ERROR);
-        break;
-      }
-      else
-      {
-        #ifdef SERIAL_PRINTING
-          Serial.printf("Will try again in 5 seconds\n");
-        #endif
-        delay(5000); // Wait 5 seconds before retrying
-      }
-    }
-  }
-}
-
-void mqtt_callback(char* topic, byte* message, unsigned int length) 
-{
-  Serial.printf("Message arrived on topic: ");
-  Serial.print(topic);
-  Serial.printf(". Message: ");
-  String messageTemp;
-  
-  for (int i = 0; i < length; i++) 
-  {
-    Serial.print((char)message[i]);
-    messageTemp += (char)message[i];
-  }
-  Serial.println();
-
-  // Feel free to add more if statements to control more GPIOs with MQTT
 }
 
 void GetNetworkTime(void)

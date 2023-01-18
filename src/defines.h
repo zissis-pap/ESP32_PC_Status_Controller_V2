@@ -1,4 +1,4 @@
-#define firmware_v      "V0.02.1 - 17 Jan 23"
+#define firmware_v      "V0.02.2 - 18 Jan 23"
 #define                 SERIAL_PRINTING
 
 // SET DOT LED MATRIX DISPLAY PARAMETERS =============================================================
@@ -20,10 +20,6 @@
 #define RST_SW          32                      // Connects to Reset Switch with input pulldown
 #define RST_State       34                      // If HIGH it means the PC is ON
 #define LED_BUILTIN     2
-
-
-// SET MQTT PARAMETERS ===============================================================================
-#define mqtt_server         "192.168.1.44"      // MQTT broker address
 
 // NTP SERVER PARAMETERS =============================================================================
 #define ntpServer           "pool.ntp.org"

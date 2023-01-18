@@ -1,8 +1,7 @@
 
 #define SYSTEM_OK           0
 #define WIFI_DISCONNECTED   1UL << 1
-#define MQTT_ERROR          1UL << 2
-#define NTP_SERVER_DOWN     1UL << 3
+#define NTP_SERVER_DOWN     1UL << 2
 
 
 /* Basic logic enumerations */
